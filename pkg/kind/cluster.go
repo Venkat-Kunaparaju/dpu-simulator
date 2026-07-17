@@ -270,7 +270,35 @@ func (m *KindManager) createCluster(name string, cfg *v1alpha4.Cluster, kubeconf
 		return fmt.Errorf("failed to create Kind cluster %s: %w", name, err)
 	}
 
+	if err := m.raiseNodePIDsLimits(platform.NewLocalExecutor(), name); err != nil {
+		log.Warn("Failed to raise Kind node pids limit on %s: %v", name, err)
+	}
+
 	log.Info("✓ Created Kind cluster: %s", name)
+	return nil
+}
+
+// raiseNodePIDsLimits removes the default 2048 PID cgroup cap on Kind node
+// containers. Dense VF pod churn spawns many concurrent CNI plugin processes;
+// without this, ovn-k8s-cni fails with "failed to create new OS thread" / errno=11.
+func (m *KindManager) raiseNodePIDsLimits(cmdExec platform.CommandExecutor, clusterName string) error {
+	nodes, err := m.provider.ListNodes(clusterName)
+	if err != nil {
+		return fmt.Errorf("list kind nodes for %s: %w", clusterName, err)
+	}
+
+	var updated int
+	for _, node := range nodes {
+		name := node.String()
+		// As per docker & podman docs, --pids-limit=-1 means no limit.
+		if err := cmdExec.RunCmd(log.LevelInfo, m.containerBin, "update", "--pids-limit", "-1", name); err != nil {
+			return fmt.Errorf("raise pids limit on %s: %w", name, err)
+		}
+		updated++
+	}
+	if updated > 0 {
+		log.Info("✓ Raised pids limit on %d Kind node(s) in cluster %s", updated, clusterName)
+	}
 	return nil
 }
 
