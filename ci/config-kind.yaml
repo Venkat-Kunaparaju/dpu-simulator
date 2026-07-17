@@ -8,7 +8,7 @@
 networks:
   - name: "host-to-dpu-link"
     type: "HostToDpu"
-    num_pairs: 16
+    num_pairs: 128
 
 kind:
   nodes:
