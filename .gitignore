@@ -47,3 +47,6 @@ go.work
 # Auto-cloned repositories
 ovn-kubernetes/
 kubernetes-traffic-flow-tests/
+
+# kube-burner rendered workloads
+workloads/

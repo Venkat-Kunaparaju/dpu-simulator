@@ -28,6 +28,7 @@ All these DPUs have common simularities, some we can emulate better than others.
 - **Multi-cluster**: Each `kubernetes.clusters[]` entry is a separate API server and kubeconfig; nodes select a cluster with `k8s_cluster`.
 - **Custom images**: Optional local registry builds (e.g. custom OVN-K) or Kind `kind load` when the registry is disabled.
 - **Optional TFT**: `tft` blocks in config support `dpu-sim tft run` for traffic checks (including OVN-Kubernetes DPU offload).
+- **Optional kube-burner**: `dpu-sim kube-burner run` runs node-density-cni with `dpusim.io/vf` resource on DPU-host workers.
 - 🧹 **Cleanup** for both VM and Kind deployments.
 
 ### VM Mode Features
@@ -829,6 +830,15 @@ Similarly, the kubernetes-traffic-flow-tests repository is automatically cloned 
 ```bash
 ./bin/dpu-sim tft run --tft-repo-path /path/to/kubernetes-traffic-flow-tests
 ```
+
+For DPU-host node-density CNI stress (kube-burner), after the cluster is up:
+
+```bash
+./bin/dpu-sim kube-burner run --config config-kind-ovnk-offload.yaml
+./bin/dpu-sim kube-burner cleanup --config config-kind-ovnk-offload.yaml
+```
+
+kube-burner is taken from PATH (or installed via the upstream script into `~/.local/bin`) unless you pass `--kube-burner-bin` / `--skip-install`. Workload templates live in `pkg/kubeburner/templates/` (embedded in the `dpu-sim` binary).
 
 To work on OVN-Kubernetes changes:
 

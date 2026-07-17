@@ -137,8 +137,8 @@ func ResolveKubeconfigPath(cfg *config.Config, dpuSimConfigPath, clusterOverride
 		if err != nil {
 			return "", err
 		}
-		if err := kubeconfigPathMustExist(path, ""); err != nil {
-			return "", err
+		if err := k8s.RequireKubeconfigFile(path, ""); err != nil {
+			return "", fmt.Errorf("%w (from kubeconfig: in dpu-sim config); fix the path or run dpu-sim deploy", err)
 		}
 		return path, nil
 	}
@@ -157,29 +157,10 @@ func ResolveKubeconfigPath(cfg *config.Config, dpuSimConfigPath, clusterOverride
 	if err != nil {
 		return "", fmt.Errorf("kubeconfig path: %w", err)
 	}
-	if err := kubeconfigPathMustExist(absPath, cluster); err != nil {
+	if err := k8s.RequireKubeconfigFile(absPath, cluster); err != nil {
 		return "", err
 	}
 	return absPath, nil
-}
-
-// kubeconfigPathMustExist returns an error if absPath is missing or not a regular file.
-// When clusterForMsg is non-empty, errors assume the path came from kubernetes.kubeconfig_dir + cluster.
-func kubeconfigPathMustExist(absPath, clusterForMsg string) error {
-	st, err := os.Stat(absPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			if clusterForMsg != "" {
-				return fmt.Errorf("kubeconfig for cluster %q not found at %s; did you run dpu-sim deploy?", clusterForMsg, absPath)
-			}
-			return fmt.Errorf("kubeconfig file not found at %s (from kubeconfig: in dpu-sim config); fix the path or run dpu-sim deploy", absPath)
-		}
-		return fmt.Errorf("kubeconfig %s: %w", absPath, err)
-	}
-	if st.IsDir() {
-		return fmt.Errorf("kubeconfig path %s is a directory, not a file", absPath)
-	}
-	return nil
 }
 
 func resolvePathRelativeToConfig(dpuSimConfigPath, p string) (string, error) {

@@ -516,6 +516,26 @@ func GetKubeconfigPath(clusterName, kubeconfigDir string) string {
 	return fmt.Sprintf("%s/%s", kubeconfigDir, filename)
 }
 
+// RequireKubeconfigFile returns an error if absPath is missing or not a regular file.
+// When clusterForMsg is non-empty, not-found errors mention the cluster and suggest
+// running dpu-sim deploy.
+func RequireKubeconfigFile(absPath, clusterForMsg string) error {
+	st, err := os.Stat(absPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if clusterForMsg != "" {
+				return fmt.Errorf("kubeconfig for cluster %q not found at %s; did you run dpu-sim deploy?", clusterForMsg, absPath)
+			}
+			return fmt.Errorf("kubeconfig file not found at %s", absPath)
+		}
+		return fmt.Errorf("kubeconfig %s: %w", absPath, err)
+	}
+	if !st.Mode().IsRegular() {
+		return fmt.Errorf("kubeconfig path %s is not a regular file", absPath)
+	}
+	return nil
+}
+
 // FindKubeconfig returns the kubeconfig file path for a cluster if it exists
 // Returns the path and nil error if found, or empty string and error if not found
 func findKubeconfig(clusterName, kubeconfigDir string) (string, error) {
