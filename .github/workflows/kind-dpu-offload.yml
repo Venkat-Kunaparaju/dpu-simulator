@@ -19,11 +19,17 @@ jobs:
         include:
           - name: overlay
             deploy-mode: overlay
+            run-kube-burner: true
+            run-tft: true
             artifact-prefix: kind-dpu-offload
           - name: no-overlay
             deploy-mode: no-overlay
+            run-kube-burner: true
+            run-tft: true
             artifact-prefix: kind-dpu-no-overlay
     uses: ./.github/workflows/kind-tft.yml
     with:
       deploy-mode: ${{ matrix.deploy-mode }}
+      run-kube-burner: ${{ matrix.run-kube-burner }}
+      run-tft: ${{ matrix.run-tft }}
       artifact-prefix: ${{ matrix.artifact-prefix }}
