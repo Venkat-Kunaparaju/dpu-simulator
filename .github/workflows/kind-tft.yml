@@ -326,8 +326,8 @@ jobs:
             TFT_KUBECONFIG="${CONFIG_WORKDIR}/kubeconfig/dpu-sim-host.kubeconfig" \
             "${DPU_SIM_ROOT}/bin/dpu-sim" tft run --config "${CONFIG_PATH}" --tft-config "${TFT_CONFIG_PATH}" --tft-repo-path "${TFT_ROOT}" --check
 
-      - name: Export kind logs on failure
-        if: failure()
+      - name: Export kind logs
+        if: always()
         env:
           ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
           KIND_EXPERIMENTAL_PROVIDER: docker
@@ -342,16 +342,16 @@ jobs:
           kubectl --kubeconfig "${DPU_SIM_ROOT}/kubeconfig/dpu-sim-dpu.kubeconfig" get pods -A -o wide \
             > "${logs_dir}/dpu-sim-dpu-pods.txt" 2>&1 || true
 
-      - name: Upload kind logs on failure
-        if: failure()
+      - name: Upload kind logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact-prefix }}-logs
           path: /tmp/${{ inputs.artifact-prefix }}-logs
           if-no-files-found: ignore
 
-      - name: Collect TFT results on failure
-        if: ${{ failure() && steps.paths.outputs.run_tft == 'true' }}
+      - name: Collect TFT results
+        if: ${{ always() && steps.paths.outputs.run_tft == 'true' }}
         env:
           ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
         run: |
@@ -362,8 +362,8 @@ jobs:
             cp -a "${results_dir}/." "${artifact_dir}/"
           fi
 
-      - name: Upload TFT results on failure
-        if: ${{ failure() && steps.paths.outputs.run_tft == 'true' }}
+      - name: Upload TFT results
+        if: ${{ always() && steps.paths.outputs.run_tft == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact-prefix }}-tft-results
