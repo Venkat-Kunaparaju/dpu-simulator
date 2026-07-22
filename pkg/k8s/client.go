@@ -637,6 +637,35 @@ func (c *K8sClient) CreateNamespace(name string) error {
 	return err
 }
 
+// EnsureNamespace creates a namespace if it does not already exist.
+func (c *K8sClient) EnsureNamespace(name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := c.clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+	}, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create namespace %s: %w", name, err)
+	}
+	return nil
+}
+
+// EnsureServiceAccount creates a ServiceAccount if it does not already exist.
+func (c *K8sClient) EnsureServiceAccount(namespace, name string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+	}
+	_, err := c.clientset.CoreV1().ServiceAccounts(namespace).Create(ctx, sa, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create service account %s/%s: %w", namespace, name, err)
+	}
+	return nil
+}
+
 // DeleteNamespace deletes a namespace
 func (c *K8sClient) DeleteNamespace(name string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -744,6 +773,61 @@ func (c *K8sClient) DeleteSecret(namespace, name string) error {
 	defer cancel()
 
 	return c.clientset.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+}
+
+// EnsureServiceAccountTokenSecret creates a kubernetes.io/service-account-token
+// Secret for the given ServiceAccount (if missing) and waits until both token
+// and ca.crt are populated by the token controller.
+func (c *K8sClient) EnsureServiceAccountTokenSecret(namespace, name, serviceAccount string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Annotations: map[string]string{
+				"kubernetes.io/service-account.name": serviceAccount,
+			},
+		},
+		Type: corev1.SecretTypeServiceAccountToken,
+	}
+	_, err := c.clientset.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create service account token secret %s/%s: %w", namespace, name, err)
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		populated, getErr := c.clientset.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+		if getErr != nil {
+			if !apierrors.IsNotFound(getErr) {
+				return fmt.Errorf("failed to get service account token secret %s/%s: %w", namespace, name, getErr)
+			}
+		} else {
+			if populated.Type != corev1.SecretTypeServiceAccountToken {
+				return fmt.Errorf("secret %s/%s exists with incompatible type %q (want %q)",
+					namespace, name, populated.Type, corev1.SecretTypeServiceAccountToken)
+			}
+			if saName := populated.Annotations["kubernetes.io/service-account.name"]; saName != serviceAccount {
+				return fmt.Errorf("secret %s/%s exists with incompatible service-account.name annotation %q (want %q)",
+					namespace, name, saName, serviceAccount)
+			}
+			if _, hasToken := populated.Data["token"]; hasToken {
+				if _, hasCA := populated.Data["ca.crt"]; hasCA {
+					return nil
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for service account token secret %s/%s to be populated: %w", namespace, name, ctx.Err())
+		case <-ticker.C:
+		}
+	}
 }
 
 // RolloutRestartDaemonSet triggers a rolling restart of a DaemonSet by updating

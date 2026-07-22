@@ -2,10 +2,8 @@ package cni
 
 import (
 	"context"
-	"fmt"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -19,85 +17,20 @@ func (m *CNIManager) CreateFRRK8sHostAccess() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	if err := m.ensureNamespace(ctx, frrK8sNamespace); err != nil {
+	if err := m.k8sClient.EnsureNamespace(frrK8sNamespace); err != nil {
 		return err
 	}
-	if err := m.ensureServiceAccount(ctx, frrK8sNamespace, "frr-k8s-daemon"); err != nil {
+	if err := m.k8sClient.EnsureServiceAccount(frrK8sNamespace, "frr-k8s-daemon"); err != nil {
 		return err
 	}
 	if err := m.ensureFRRK8sHostAccessRBAC(ctx); err != nil {
 		return err
 	}
-	if err := m.ensureServiceAccountTokenSecret(ctx, frrK8sNamespace, frrK8sTokenSecretName, "frr-k8s-daemon"); err != nil {
+	if err := m.k8sClient.EnsureServiceAccountTokenSecret(frrK8sNamespace, frrK8sTokenSecretName, "frr-k8s-daemon", 60*time.Second); err != nil {
 		return err
 	}
 
 	return nil
-}
-
-func (m *CNIManager) ensureNamespace(ctx context.Context, name string) error {
-	_, err := m.k8sClient.Clientset().CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to get namespace %s: %w", name, err)
-	}
-	_, err = m.k8sClient.Clientset().CoreV1().Namespaces().Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create namespace %s: %w", name, err)
-	}
-	return nil
-}
-
-func (m *CNIManager) ensureServiceAccount(ctx context.Context, namespace, name string) error {
-	sa := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
-	_, err := m.k8sClient.Clientset().CoreV1().ServiceAccounts(namespace).Create(ctx, sa, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create service account %s/%s: %w", namespace, name, err)
-	}
-	return nil
-}
-
-func (m *CNIManager) ensureServiceAccountTokenSecret(ctx context.Context, namespace, name, serviceAccount string) error {
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Annotations: map[string]string{
-				"kubernetes.io/service-account.name": serviceAccount,
-			},
-		},
-		Type: corev1.SecretTypeServiceAccountToken,
-	}
-	_, err := m.k8sClient.Clientset().CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create service account token secret %s/%s: %w", namespace, name, err)
-	}
-
-	ticker := time.NewTicker(2 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		populated, getErr := m.k8sClient.Clientset().CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
-		if getErr != nil {
-			if !apierrors.IsNotFound(getErr) {
-				return fmt.Errorf("failed to get service account token secret %s/%s: %w", namespace, name, getErr)
-			}
-		} else {
-			if _, hasToken := populated.Data["token"]; hasToken {
-				if _, hasCA := populated.Data["ca.crt"]; hasCA {
-					return nil
-				}
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("timed out waiting for service account token secret %s/%s to be populated: %w", namespace, name, ctx.Err())
-		case <-ticker.C:
-		}
-	}
 }
 
 func (m *CNIManager) ensureFRRK8sHostAccessRBAC(ctx context.Context) error {
