@@ -490,10 +490,17 @@ func isDeploymentAvailable(deployment *appsv1.Deployment) bool {
 
 // GetNodes returns all nodes in the cluster
 func (c *K8sClient) GetNodes() ([]corev1.Node, error) {
+	return c.ListNodes("")
+}
+
+// ListNodes returns nodes matching an optional kubectl-style label selector.
+func (c *K8sClient) ListNodes(labelSelector string) ([]corev1.Node, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	nodes, err := c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list nodes: %w", err)
 	}

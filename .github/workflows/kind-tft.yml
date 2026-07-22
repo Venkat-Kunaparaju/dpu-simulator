@@ -38,6 +38,21 @@ on:
         required: false
         type: string
         default: overlay
+      run-kube-burner:
+        description: Run kube-burner node-density-cni before traffic flow tests.
+        required: false
+        type: boolean
+        default: false
+      run-tft:
+        description: Run kubernetes-traffic-flow-tests after deploy (default true for callers that omit this input).
+        required: false
+        type: boolean
+        default: true
+      kube-burner-pods-per-node:
+        description: --pods-per-node for kube-burner.
+        required: false
+        type: number
+        default: 64
       tft-env:
         description: Newline-separated TFT environment overrides.
         required: false
@@ -104,6 +119,7 @@ jobs:
           CONFIG: ${{ inputs.config }}
           TFT_CONFIG: ${{ inputs.tft-config }}
           DEPLOY_MODE: ${{ inputs.deploy-mode }}
+          RUN_TFT: ${{ inputs.run-tft }}
         run: |
           config_path="${DPU_SIM_ROOT}/${CONFIG}"
           case "${DEPLOY_MODE}" in
@@ -113,26 +129,35 @@ jobs:
               exit 1
               ;;
           esac
-          if [ -n "${TFT_CONFIG}" ]; then
-            tft_config_path="${GITHUB_WORKSPACE}/${TFT_CONFIG}"
-          elif [ "${DEPLOY_MODE}" = "no-overlay" ]; then
-            tft_config_path="${DPU_SIM_ROOT}/ci/tft-config/tft-no-overlay.yaml"
-          else
-            tft_config_path="${DPU_SIM_ROOT}/ci/tft-config/tft-overlay.yaml"
-          fi
           if [ ! -f "${config_path}" ]; then
             echo "::error::dpu-sim config not found: ${config_path}"
             exit 1
           fi
-          if [ ! -f "${tft_config_path}" ]; then
-            echo "::error::TFT config not found: ${tft_config_path}"
-            exit 1
+          # workflow_call boolean defaults to true; treat empty as true for older callers.
+          case "${RUN_TFT}" in
+            false|False|FALSE|0) RUN_TFT=false ;;
+            *) RUN_TFT=true ;;
+          esac
+          tft_config_path=""
+          if [ "${RUN_TFT}" = "true" ]; then
+            if [ -n "${TFT_CONFIG}" ]; then
+              tft_config_path="${GITHUB_WORKSPACE}/${TFT_CONFIG}"
+            elif [ "${DEPLOY_MODE}" = "no-overlay" ]; then
+              tft_config_path="${DPU_SIM_ROOT}/ci/tft-config/tft-no-overlay.yaml"
+            else
+              tft_config_path="${DPU_SIM_ROOT}/ci/tft-config/tft-overlay.yaml"
+            fi
+            if [ ! -f "${tft_config_path}" ]; then
+              echo "::error::TFT config not found: ${tft_config_path}"
+              exit 1
+            fi
           fi
           {
             echo "config_path=${config_path}"
             echo "config_workdir=${DPU_SIM_ROOT}"
             echo "tft_config_path=${tft_config_path}"
             echo "deploy_mode=${DEPLOY_MODE}"
+            echo "run_tft=${RUN_TFT}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Checkout OVN-Kubernetes
@@ -152,6 +177,7 @@ jobs:
           fi
 
       - name: Checkout kubernetes-traffic-flow-tests
+        if: ${{ steps.paths.outputs.run_tft == 'true' }}
         env:
           TFT_REPO_URL: ${{ inputs.tft-repo-url }}
           TFT_REF: ${{ inputs.tft-ref }}
@@ -180,6 +206,7 @@ jobs:
         uses: azure/setup-helm@v4
 
       - name: Set up Python for traffic flow tests
+        if: ${{ steps.paths.outputs.run_tft == 'true' }}
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -240,7 +267,31 @@ jobs:
           kubectl wait --for=condition=Ready nodes --all \
             --kubeconfig kubeconfig/dpu-sim-dpu.kubeconfig --timeout=25m
 
+      - name: Install kube-burner
+        if: ${{ inputs.run-kube-burner }}
+        run: |
+          # Pinned to current latest stable (assets use capital V, e.g. V2.7.3).
+          KUBE_BURNER_VERSION=v2.7.3
+          ARCHIVE_VERSION="V${KUBE_BURNER_VERSION#v}"
+          curl -fsSL "https://github.com/kube-burner/kube-burner/releases/download/${KUBE_BURNER_VERSION}/kube-burner-${ARCHIVE_VERSION}-linux-x86_64.tar.gz" \
+            | sudo tar xz -C /usr/local/bin kube-burner
+          kube-burner version
+
+      - name: Run kube-burner node-density-cni
+        if: ${{ inputs.run-kube-burner }}
+        working-directory: ${{ steps.paths.outputs.config_workdir }}
+        env:
+          KIND_EXPERIMENTAL_PROVIDER: docker
+          CONFIG_PATH: ${{ steps.paths.outputs.config_path }}
+          PODS_PER_NODE: ${{ inputs.kube-burner-pods-per-node }}
+        run: |
+          "${DPU_SIM_ROOT}/bin/dpu-sim" kube-burner run \
+            --config "${CONFIG_PATH}" \
+            --pods-per-node "${PODS_PER_NODE}" \
+            --skip-install
+
       - name: TFT Python venv
+        if: ${{ steps.paths.outputs.run_tft == 'true' }}
         working-directory: ${{ steps.paths.outputs.config_workdir }}
         env:
           CONFIG_PATH: ${{ steps.paths.outputs.config_path }}
@@ -248,6 +299,7 @@ jobs:
           "${DPU_SIM_ROOT}/bin/dpu-sim" tft venv --config "${CONFIG_PATH}" --tft-repo-path "${TFT_ROOT}"
 
       - name: Run traffic flow tests
+        if: ${{ steps.paths.outputs.run_tft == 'true' }}
         working-directory: ${{ steps.paths.outputs.config_workdir }}
         env:
           CONFIG_PATH: ${{ steps.paths.outputs.config_path }}
@@ -278,6 +330,7 @@ jobs:
         if: failure()
         env:
           ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
+          KIND_EXPERIMENTAL_PROVIDER: docker
         run: |
           logs_dir="/tmp/${ARTIFACT_PREFIX}-logs"
           mkdir -p "${logs_dir}"
@@ -298,7 +351,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Collect TFT results on failure
-        if: failure()
+        if: ${{ failure() && steps.paths.outputs.run_tft == 'true' }}
         env:
           ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
         run: |
@@ -310,7 +363,7 @@ jobs:
           fi
 
       - name: Upload TFT results on failure
-        if: failure()
+        if: ${{ failure() && steps.paths.outputs.run_tft == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact-prefix }}-tft-results

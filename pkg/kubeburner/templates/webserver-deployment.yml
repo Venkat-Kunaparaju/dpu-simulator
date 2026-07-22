@@ -1,0 +1,47 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: webserver-{{.Replica}}-{{.Iteration}}
+spec:
+  template:
+    metadata:
+      labels:
+        name: webserver-{{.Replica}}-{{.Iteration}}
+        app: webserver
+      annotations:
+        test: ovsperf
+    spec:
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: webserver
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+__NODE_AFFINITY__
+      containers:
+      - name: webserver
+        image: quay.io/cloud-bulldozer/sampleapp:latest
+        resources:
+          requests:
+            memory: "10Mi"
+            cpu: "10m"
+            "{{.vfResource}}": "1"
+          limits:
+            "{{.vfResource}}": "1"
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          privileged: false
+      restartPolicy: Always
+  replicas: 1
+  selector:
+    matchLabels:
+      name: webserver-{{.Replica}}-{{.Iteration}}
+  strategy:
+    type: RollingUpdate
