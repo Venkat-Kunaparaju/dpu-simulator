@@ -1,0 +1,49 @@
+name: Free Disk Space
+description: Reclaims disk space on GitHub-hosted runners
+
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        echo "=== Disk usage before cleanup ==="
+        df -h /
+
+        echo "=== Remove preinstalled SDKs ==="
+        sudo rm -rf /usr/local/lib/android
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc /usr/local/.ghcup
+        sudo rm -rf "${AGENT_TOOLSDIRECTORY}"
+
+        echo "=== Apt cleanup ==="
+        sudo apt-get update
+        if command -v eatmydata >/dev/null 2>&1; then
+          SUDO_EAT="sudo eatmydata"
+        else
+          echo "eatmydata not found – falling back to plain apt-get"
+          SUDO_EAT="sudo"
+        fi
+        $SUDO_EAT apt-get remove -y --fix-missing \
+          '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' 'php.*' \
+          '^mongodb-.*' '^mysql-.*' \
+          azure-cli google-chrome-stable firefox powershell mono-devel libgl1-mesa-dri \
+          microsoft-edge-stable  google-cloud-sdk google-cloud-cli \
+          || true
+
+        sudo apt-get autoremove -y || true
+        sudo apt-get clean || true
+
+        echo "=== Docker cleanup ==="
+        sudo docker system prune -af --volumes || true
+        sudo docker image prune --all --force || true
+
+        echo "=== Disable and remove swap ==="
+        sudo swapon --show
+        sudo swapoff -a || true    # ignore error when no swap is present
+        sudo rm -f /mnt/swapfile
+
+        echo "=== Remove potential leftover PV setup image ==="
+        sudo rm -f /mnt/tmp-pv.img
+
+        echo "=== Disk usage after cleanup ==="
+        df -h /

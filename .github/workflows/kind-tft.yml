@@ -73,33 +73,6 @@ jobs:
       OVN_KUBERNETES_ROOT: ${{ github.workspace }}/ovn-kubernetes
       TFT_ROOT: ${{ github.workspace }}/kubernetes-traffic-flow-tests
     steps:
-      - name: Free disk space
-        run: |
-          echo "Disk before cleanup:"
-          df -h /
-
-          # Preinstalled SDKs
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /opt/ghc /usr/local/.ghcup
-          sudo rm -rf "${AGENT_TOOLSDIRECTORY}"
-
-          # Drop unused preloaded Docker images on the runner.
-          sudo docker image prune --all --force || true
-
-          # Remove large preinstalled packages
-          sudo apt-get remove -y --fix-missing \
-            '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' 'php.*' \
-            '^mongodb-.*' '^mysql-.*' \
-            azure-cli google-chrome-stable firefox powershell mono-devel libgl1-mesa-dri \
-            google-cloud-sdk google-cloud-cli \
-            || true
-          sudo apt-get autoremove -y || true
-          sudo apt-get clean || true
-
-          echo "Disk after cleanup:"
-          df -h /
-
       - name: Checkout caller repository
         uses: actions/checkout@v4
         with:
@@ -112,6 +85,9 @@ jobs:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: dpu-simulator
+
+      - name: Free disk space
+        uses: ./dpu-simulator/.github/actions/free-disk-space
 
       - name: Resolve config paths
         id: paths
@@ -288,6 +264,7 @@ jobs:
           "${DPU_SIM_ROOT}/bin/dpu-sim" kube-burner run \
             --config "${CONFIG_PATH}" \
             --pods-per-node "${PODS_PER_NODE}" \
+            --timeout 5m \
             --skip-install
 
       - name: TFT Python venv
@@ -326,44 +303,143 @@ jobs:
             TFT_KUBECONFIG="${CONFIG_WORKDIR}/kubeconfig/dpu-sim-host.kubeconfig" \
             "${DPU_SIM_ROOT}/bin/dpu-sim" tft run --config "${CONFIG_PATH}" --tft-config "${TFT_CONFIG_PATH}" --tft-repo-path "${TFT_ROOT}" --check
 
-      - name: Export kind logs on failure
-        if: failure()
+      # Collect before Cleanup so cancelled/failed runs still leave artifacts.
+      # always() covers failure and cancelled; continue-on-error keeps Cleanup reachable.
+      - name: Export kind logs
+        if: always()
+        continue-on-error: true
         env:
           ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
           KIND_EXPERIMENTAL_PROVIDER: docker
         run: |
+          set +e
           logs_dir="/tmp/${ARTIFACT_PREFIX}-logs"
           mkdir -p "${logs_dir}"
           for cluster in dpu-sim-host dpu-sim-host-kind dpu-sim-dpu dpu-sim-dpu-kind; do
             kind export logs "${logs_dir}" --name "${cluster}" 2>/dev/null || true
           done
-          kubectl --kubeconfig "${DPU_SIM_ROOT}/kubeconfig/dpu-sim-host.kubeconfig" get pods -A -o wide \
-            > "${logs_dir}/dpu-sim-host-pods.txt" 2>&1 || true
-          kubectl --kubeconfig "${DPU_SIM_ROOT}/kubeconfig/dpu-sim-dpu.kubeconfig" get pods -A -o wide \
-            > "${logs_dir}/dpu-sim-dpu-pods.txt" 2>&1 || true
+          host_kc="${DPU_SIM_ROOT}/kubeconfig/dpu-sim-host.kubeconfig"
+          dpu_kc="${DPU_SIM_ROOT}/kubeconfig/dpu-sim-dpu.kubeconfig"
+          if [ -f "${host_kc}" ]; then
+            kubectl --kubeconfig "${host_kc}" get pods -A -o wide \
+              > "${logs_dir}/dpu-sim-host-pods.txt" 2>&1 || true
+            kubectl --kubeconfig "${host_kc}" get nodes -o wide \
+              > "${logs_dir}/dpu-sim-host-nodes.txt" 2>&1 || true
+            kubectl --kubeconfig "${host_kc}" get events -A --sort-by='.lastTimestamp' \
+              > "${logs_dir}/dpu-sim-host-events.txt" 2>&1 || true
+          else
+            echo "host kubeconfig missing: ${host_kc}" > "${logs_dir}/dpu-sim-host-pods.txt"
+          fi
+          if [ -f "${dpu_kc}" ]; then
+            kubectl --kubeconfig "${dpu_kc}" get pods -A -o wide \
+              > "${logs_dir}/dpu-sim-dpu-pods.txt" 2>&1 || true
+            kubectl --kubeconfig "${dpu_kc}" get nodes -o wide \
+              > "${logs_dir}/dpu-sim-dpu-nodes.txt" 2>&1 || true
+            kubectl --kubeconfig "${dpu_kc}" get events -A --sort-by='.lastTimestamp' \
+              > "${logs_dir}/dpu-sim-dpu-events.txt" 2>&1 || true
+          else
+            echo "dpu kubeconfig missing: ${dpu_kc}" > "${logs_dir}/dpu-sim-dpu-pods.txt"
+          fi
+          exit 0
 
-      - name: Upload kind logs on failure
-        if: failure()
+      - name: Upload kind logs
+        if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact-prefix }}-logs
           path: /tmp/${{ inputs.artifact-prefix }}-logs
           if-no-files-found: ignore
 
-      - name: Collect TFT results on failure
-        if: ${{ failure() && steps.paths.outputs.run_tft == 'true' }}
+      - name: Collect kube-burner diagnostics
+        if: ${{ always() && inputs.run-kube-burner }}
+        continue-on-error: true
         env:
           ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
         run: |
+          set +e
+          out_dir="/tmp/${ARTIFACT_PREFIX}-kube-burner"
+          mkdir -p "${out_dir}"
+          host_kc="${DPU_SIM_ROOT}/kubeconfig/dpu-sim-host.kubeconfig"
+          work_dir="${DPU_SIM_ROOT}/workloads/kube-burner-node-density-cni-dpusim"
+
+          if [ -d "${work_dir}" ]; then
+            cp -a "${work_dir}" "${out_dir}/workdir" 2>/dev/null || true
+          else
+            echo "kube-burner workdir missing: ${work_dir}" > "${out_dir}/workdir-missing.txt"
+          fi
+
+          if [ ! -f "${host_kc}" ]; then
+            echo "host kubeconfig missing: ${host_kc}" > "${out_dir}/kubeconfig-missing.txt"
+            exit 0
+          fi
+
+          kubectl --kubeconfig "${host_kc}" get ns -o name 2>/dev/null \
+            | grep 'namespace/node-density-cni' \
+            > "${out_dir}/namespaces.txt" || true
+          kubectl --kubeconfig "${host_kc}" get pods -A -o wide 2>/dev/null \
+            | grep -E 'NAMESPACE|node-density-cni' \
+            > "${out_dir}/pods.txt" || true
+          kubectl --kubeconfig "${host_kc}" get deploy,svc,ep -A 2>/dev/null \
+            | grep -E 'NAMESPACE|node-density-cni' \
+            > "${out_dir}/workloads.txt" || true
+          kubectl --kubeconfig "${host_kc}" get events -A --sort-by='.lastTimestamp' 2>/dev/null \
+            | grep -E 'LAST SEEN|node-density-cni' \
+            > "${out_dir}/events.txt" || true
+          kubectl --kubeconfig "${host_kc}" get nodes -l 'k8s.ovn.org/dpu-host=' -o wide \
+            > "${out_dir}/dpu-host-nodes.txt" 2>&1 || true
+          kubectl --kubeconfig "${host_kc}" get nodes -l 'k8s.ovn.org/dpu-host=' \
+            -o custom-columns=NAME:.metadata.name,ALLOC_VF:.status.allocatable.dpusim\\.io/vf,CAP_VF:.status.capacity.dpusim\\.io/vf \
+            > "${out_dir}/dpu-host-vf.txt" 2>&1 || true
+
+          # Describe not-Ready density pods (Pending/ContainerCreating or
+          # Running with failing probes). Cap to keep artifacts small.
+          mkdir -p "${out_dir}/pod-describe"
+          count=0
+          while IFS= read -r line; do
+            ns="${line%% *}"
+            name="${line#* }"
+            [ -z "${ns}" ] || [ -z "${name}" ] && continue
+            kubectl --kubeconfig "${host_kc}" describe pod -n "${ns}" "${name}" \
+              > "${out_dir}/pod-describe/${ns}_${name}.txt" 2>&1 || true
+            count=$((count + 1))
+            [ "${count}" -ge 40 ] && break
+          done < <(
+            kubectl --kubeconfig "${host_kc}" get pods -A --no-headers 2>/dev/null \
+              | awk '/node-density-cni/ {
+                  split($3, r, "/");
+                  if ($4 != "Running" || r[1] != r[2] || r[2] == 0) print $1, $2
+                }'
+          )
+          exit 0
+
+      - name: Upload kube-burner diagnostics
+        if: ${{ always() && inputs.run-kube-burner }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-prefix }}-kube-burner
+          path: /tmp/${{ inputs.artifact-prefix }}-kube-burner
+          if-no-files-found: ignore
+
+      - name: Collect TFT results
+        if: ${{ always() && steps.paths.outputs.run_tft == 'true' }}
+        continue-on-error: true
+        env:
+          ARTIFACT_PREFIX: ${{ inputs.artifact-prefix }}
+        run: |
+          set +e
           results_dir="${TFT_ROOT}/ft-logs"
           artifact_dir="/tmp/${ARTIFACT_PREFIX}-tft-results"
           if [ -d "${results_dir}" ]; then
             mkdir -p "${artifact_dir}"
-            cp -a "${results_dir}/." "${artifact_dir}/"
+            cp -a "${results_dir}/." "${artifact_dir}/" || true
           fi
+          exit 0
 
-      - name: Upload TFT results on failure
-        if: ${{ failure() && steps.paths.outputs.run_tft == 'true' }}
+      - name: Upload TFT results
+        if: ${{ always() && steps.paths.outputs.run_tft == 'true' }}
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.artifact-prefix }}-tft-results
@@ -372,6 +448,7 @@ jobs:
 
       - name: Cleanup
         if: always()
+        continue-on-error: true
         working-directory: ${{ steps.paths.outputs.config_workdir }}
         env:
           KIND_EXPERIMENTAL_PROVIDER: docker
