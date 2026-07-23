@@ -17,12 +17,12 @@ on:
         description: TFT repository URL.
         required: false
         type: string
-        default: https://github.com/ovn-kubernetes/kubernetes-traffic-flow-tests
+        default: https://github.com/Venkat-Kunaparaju/kubernetes-traffic-flow-tests
       tft-ref:
         description: TFT git ref.
         required: false
         type: string
-        default: main
+        default: udn-uplink
       ovn-kubernetes-repo-url:
         description: OVN-Kubernetes repository URL.
         required: false
