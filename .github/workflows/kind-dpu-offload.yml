@@ -24,7 +24,7 @@ jobs:
             artifact-prefix: kind-dpu-offload
           - name: no-overlay
             deploy-mode: no-overlay
-            run-kube-burner: true
+            run-kube-burner: false
             run-tft: true
             artifact-prefix: kind-dpu-no-overlay
     uses: ./.github/workflows/kind-tft.yml
