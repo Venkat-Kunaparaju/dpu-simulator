@@ -272,9 +272,17 @@ jobs:
           frr_ip=$(docker inspect \
             -f '{{ with index .NetworkSettings.Networks "dpu-sim-uplink" }}{{ .IPAddress }}{{ end }}' \
             frr)
+          kind_external_host_ipv4=$(
+            ip -j route get 1 2>/dev/null |
+              jq -r '.[0].prefsrc // empty' 2>/dev/null || true
+          )
 
           if [ -z "${frr_ip}" ]; then
             echo "::error::FRR has no address on dpu-sim-uplink"
+            exit 1
+          fi
+          if [ -z "${kind_external_host_ipv4}" ]; then
+            echo "::error::Could not determine Kind external host IPv4"
             exit 1
           fi
 
@@ -299,7 +307,7 @@ jobs:
                     allowed:
                       mode: filtered
                       prefixes:
-                      - prefix: 172.27.0.0/16
+                      - prefix: ${kind_external_host_ipv4}/32
           EOF
 
       - name: Verify clusters are ready
