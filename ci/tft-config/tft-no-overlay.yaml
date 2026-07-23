@@ -8,7 +8,7 @@ tft:
       mode: cudn
       topology: layer3
       transport: no-overlay
-      uplinkInterface: eth0-128
+      hostInterfaceName: eth0-128
       route_advertisement:
         targetVRF: auto
         frr_configuration_selector:
