@@ -331,15 +331,16 @@ func (m *CNIManager) labelNodesForSingleNodeZones() error {
 	return nil
 }
 
-// installExternalCRDs applies the external ANP and BANP CRDs required by
-// OVN-Kubernetes. These are not bundled in the Helm chart and must be applied
-// separately. Matches install_online_ovn_kubernetes_crds in kind-helm.sh.
+// installExternalCRDs applies CRDs required by enabled OVN-Kubernetes features
+// that are not bundled in the Helm chart.
 func (m *CNIManager) installExternalCRDs() error {
-	log.Info("Applying external CRD manifests (ANP/BANP)...")
+	log.Info("Applying external CRD manifests...")
 
 	externalCRDs := []string{
 		"https://raw.githubusercontent.com/kubernetes-sigs/network-policy-api/v0.1.5/config/crd/experimental/policy.networking.k8s.io_adminnetworkpolicies.yaml",
 		"https://raw.githubusercontent.com/kubernetes-sigs/network-policy-api/v0.1.5/config/crd/experimental/policy.networking.k8s.io_baselineadminnetworkpolicies.yaml",
+		"https://raw.githubusercontent.com/k8snetworkplumbingwg/multi-networkpolicy/refs/tags/v1.0.1/scheme.yml",
+		"https://raw.githubusercontent.com/k8snetworkplumbingwg/ipamclaims/v0.5.1-alpha/artifacts/k8s.cni.cncf.io_ipamclaims.yaml",
 	}
 
 	for _, url := range externalCRDs {

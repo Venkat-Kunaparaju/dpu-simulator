@@ -199,8 +199,11 @@ jobs:
           cache: true
           cache-dependency-path: dpu-simulator/go.sum
 
-      - name: Install libvirt development headers
-        run: sudo apt-get update && sudo apt-get install -y libvirt-dev
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvirt-dev "linux-modules-extra-$(uname -r)"
+          sudo modprobe vrf
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -255,8 +258,49 @@ jobs:
         working-directory: ${{ env.OVN_KUBERNETES_ROOT }}
         env:
           DPU_SIM_CONFIG: ${{ steps.paths.outputs.config_path }}
+          DPU_SIM_UPLINK_ENABLE: "true"
+          DPU_SIM_UPLINK_INDEX: "128"
           KIND_EXPERIMENTAL_PROVIDER: docker
         run: ./contrib/kind-dpu-sim-no-overlay.sh
+
+      - name: Create TFT Uplink FRRConfiguration
+        if: ${{ steps.paths.outputs.deploy_mode == 'no-overlay' && steps.paths.outputs.run_tft == 'true' }}
+        run: |
+          set -euo pipefail
+
+          host_kubeconfig="${DPU_SIM_ROOT}/kubeconfig/dpu-sim-host.kubeconfig"
+          frr_ip=$(docker inspect \
+            -f '{{ with index .NetworkSettings.Networks "dpu-sim-uplink" }}{{ .IPAddress }}{{ end }}' \
+            frr)
+
+          if [ -z "${frr_ip}" ]; then
+            echo "::error::FRR has no address on dpu-sim-uplink"
+            exit 1
+          fi
+
+          kubectl --kubeconfig "${host_kubeconfig}" \
+            apply -n frr-k8s-system -f - <<EOF
+          apiVersion: frrk8s.metallb.io/v1beta1
+          kind: FRRConfiguration
+          metadata:
+            name: tft-primary
+            labels:
+              network: tft-primary
+          spec:
+            bgp:
+              routers:
+              - asn: 64512
+                vrf: tft-primary
+                neighbors:
+                - address: ${frr_ip}
+                  asn: 64512
+                  disableMP: true
+                  toReceive:
+                    allowed:
+                      mode: filtered
+                      prefixes:
+                      - prefix: 172.27.0.0/16
+          EOF
 
       - name: Verify clusters are ready
         if: ${{ steps.paths.outputs.deploy_mode == 'overlay' }}

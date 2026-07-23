@@ -1,7 +1,7 @@
 tft:
   - name: "tft-overlay"
     namespace: "default"
-    test_cases: "1-26,35-36"
+    test_cases: "1-26,37-45,70-79"
     duration: 5
     pre_provision: true
     connections:
