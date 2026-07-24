@@ -178,6 +178,14 @@ jobs:
       - name: Install libvirt development headers
         run: sudo apt-get update && sudo apt-get install -y libvirt-dev
 
+      - name: Install VRF kernel module
+        if: ${{ steps.paths.outputs.deploy_mode == 'no-overlay' }}
+        run: |
+          set -x
+          sudo apt-get update
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+          sudo modprobe vrf
+
       - name: Install Helm
         uses: azure/setup-helm@v4
 
@@ -232,6 +240,9 @@ jobs:
         env:
           DPU_SIM_CONFIG: ${{ steps.paths.outputs.config_path }}
           KIND_EXPERIMENTAL_PROVIDER: docker
+          # Keep docker save temp files off of /tmp to runner.temp
+          TMPDIR: ${{ runner.temp }}
+          DPU_SIM_KIND_IMAGE_TMPDIR: ${{ runner.temp }}
         run: ./contrib/kind-dpu-sim-no-overlay.sh
 
       - name: Verify clusters are ready
@@ -302,6 +313,26 @@ jobs:
           env "${tft_env_args[@]}" \
             TFT_KUBECONFIG="${CONFIG_WORKDIR}/kubeconfig/dpu-sim-host.kubeconfig" \
             "${DPU_SIM_ROOT}/bin/dpu-sim" tft run --config "${CONFIG_PATH}" --tft-config "${TFT_CONFIG_PATH}" --tft-repo-path "${TFT_ROOT}" --check
+
+      - name: Run Uplink DPU e2e tests
+        if: ${{ steps.paths.outputs.deploy_mode == 'no-overlay' }}
+        working-directory: ${{ env.OVN_KUBERNETES_ROOT }}
+        run: |
+          set -euo pipefail
+          source "${DPU_SIM_ROOT}/kubeconfig/helm-values/dpu-sim-dpu-frr-k8s.env"
+          export KUBECONFIG="${DPU_SIM_ROOT}/kubeconfig/dpu-sim-host.kubeconfig"
+          export OVN_TEST_DPU_UPLINK_NETWORK="dpu-sim-uplink"
+          export OVN_TEST_DPU_UPLINK_HOST_INTERFACE="eth0-16"
+          export OVN_TEST_DPU_UPLINK_EXPECTED_BRIDGE="breth-uplink"
+          export OVN_TEST_BGP_SERVER_NET_SUBNET_IPV4="172.27.0.0/16"
+          export OVN_TEST_BGP_SERVER_NET_SUBNET_IPV6="fc00:f853:ccd:e797::/64"
+          export ENABLE_MULTI_NET=true
+          export ENABLE_NETWORK_SEGMENTATION=true
+          export ENABLE_ROUTE_ADVERTISEMENTS=true
+          export ENABLE_NO_OVERLAY=true
+          export DYNAMIC_UDN_ALLOCATION=true
+          make -C test control-plane WHAT="Network Segmentation Uplink route advertisements uses the Uplink interface as the targetVRF auto BGP peering path"
+          make -C test control-plane WHAT="Uplink route advertisements with Dynamic UDN allocation allows node-disjoint Dynamic CUDNs to share a targetVRF auto Uplink and rejects overlap"
 
       # Collect before Cleanup so cancelled/failed runs still leave artifacts.
       # always() covers failure and cancelled; continue-on-error keeps Cleanup reachable.
