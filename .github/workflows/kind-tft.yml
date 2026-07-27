@@ -179,7 +179,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libvirt-dev
 
       - name: Install VRF kernel module
-        if: ${{ steps.paths.outputs.deploy_mode == 'no-overlay' }}
+        if: ${{ steps.paths.outputs.deploy_mode == 'no-overlay' || steps.paths.outputs.run_tft == 'true' }}
         run: |
           set -x
           sudo apt-get update
