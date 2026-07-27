@@ -13,7 +13,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ovn-kubernetes/dpu-simulator/pkg/config"
@@ -931,41 +930,11 @@ func (m *CNIManager) labelNodesForDPU(clusterName string) error {
 // cluster uses the token and CA cert from this secret for cross-cluster access.
 func (m *CNIManager) createDPUAccessSecret() error {
 	log.Info("Creating DPU access secret for cross-cluster authentication...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "ovnkube-node-sa-for-dpu",
-			Namespace: "ovn-kubernetes",
-			Annotations: map[string]string{
-				"kubernetes.io/service-account.name": "ovnkube-node",
-			},
-		},
-		Type: corev1.SecretTypeServiceAccountToken,
-	}
-
-	_, err := m.k8sClient.Clientset().CoreV1().Secrets("ovn-kubernetes").Create(ctx, secret, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
+	if err := m.k8sClient.EnsureServiceAccountTokenSecret("ovn-kubernetes", "ovnkube-node-sa-for-dpu", "ovnkube-node", 60*time.Second); err != nil {
 		return fmt.Errorf("failed to create DPU access secret: %w", err)
 	}
-
-	// Wait for the token controller to populate the secret
-	log.Info("Waiting for DPU access secret to be populated...")
-	for i := 0; i < 30; i++ {
-		time.Sleep(2 * time.Second)
-		populated, getErr := m.k8sClient.Clientset().CoreV1().Secrets("ovn-kubernetes").Get(ctx, "ovnkube-node-sa-for-dpu", metav1.GetOptions{})
-		if getErr != nil {
-			continue
-		}
-		if _, hasToken := populated.Data["token"]; hasToken {
-			log.Info("✓ DPU access secret created and populated")
-			return nil
-		}
-	}
-
-	return fmt.Errorf("timed out waiting for DPU access secret to be populated")
+	log.Info("✓ DPU access secret created and populated")
+	return nil
 }
 
 // CreateOVNKubernetesDPUAccessSecret provisions the host-cluster service
