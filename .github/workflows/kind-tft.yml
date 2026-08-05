@@ -263,7 +263,7 @@ jobs:
           KIND_EXPERIMENTAL_PROVIDER: docker
         run: ./contrib/kind-dpu-sim-no-overlay.sh
 
-      - name: Create TFT Uplink FRRConfiguration
+      - name: Create TFT Uplink and FRRConfiguration
         if: ${{ steps.paths.outputs.deploy_mode == 'no-overlay' && steps.paths.outputs.run_tft == 'true' }}
         run: |
           set -euo pipefail
@@ -288,6 +288,22 @@ jobs:
 
           kubectl --kubeconfig "${host_kubeconfig}" \
             apply -n frr-k8s-system -f - <<EOF
+          apiVersion: k8s.ovn.org/v1alpha1
+          kind: Uplink
+          metadata:
+            name: tft-primary-uplink
+          spec:
+            nodeConfigs:
+            - type: OVSBridge
+              nodeSelector:
+                matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values:
+                  - dpu-sim-host-worker
+                  - dpu-sim-host-worker2
+              hostInterfaceName: eth0-128
+          ---
           apiVersion: frrk8s.metallb.io/v1beta1
           kind: FRRConfiguration
           metadata:
