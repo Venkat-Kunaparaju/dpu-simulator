@@ -119,7 +119,13 @@ func (p *DpuSimDevicePlugin) discoverDevices() error {
 	}
 
 	if len(p.devices) == 0 {
-		return fmt.Errorf("[%s] no interfaces matching %s found", p.pool.ResourceName, p.pool.MatcherDescription())
+		// Not an error: every matching netdev may legitimately be invisible at
+		// startup, e.g. VFs sitting inside pod netns across a plugin restart,
+		// or a mgmt VF renamed by ovnkube-node. Advertise an empty pool and
+		// let checkDevices adopt devices as they appear in the host netns.
+		klog.Warningf("[%s] no interfaces matching %s found at startup; advertising empty pool until devices appear",
+			p.pool.ResourceName, p.pool.MatcherDescription())
+		return nil
 	}
 	klog.Infof("[%s] discovered %d device(s)", p.pool.ResourceName, len(p.devices))
 	return nil
@@ -245,6 +251,9 @@ func (p *DpuSimDevicePlugin) ListAndWatch(_ *pluginapi.Empty, stream pluginapi.D
 // host netns by name or by ifindex, and that has persisted for
 // unhealthyAfterMisses consecutive checks. It flips back to Healthy as soon
 // as it is present or in use again.
+//
+// Netdevs matching the pool that were not seen at startup (e.g. a VF sitting
+// inside a pod netns across a plugin restart) are added once they appear.
 func (p *DpuSimDevicePlugin) checkDevices(ctx context.Context) bool {
 	ifaces, err := p.netInterfaces()
 	if err != nil {
@@ -266,9 +275,13 @@ func (p *DpuSimDevicePlugin) checkDevices(ctx context.Context) bool {
 
 	now := p.now()
 	changed := false
+	var added []string
 
 	p.mu.Lock()
+	known := make(map[string]bool, len(p.devices))
 	for _, s := range p.devices {
+		known[s.device.ID] = true
+
 		present := false
 		if iface, ok := byName[s.device.ID]; ok {
 			present = true
@@ -300,7 +313,24 @@ func (p *DpuSimDevicePlugin) checkDevices(ctx context.Context) bool {
 			}
 		}
 	}
+	for _, iface := range ifaces {
+		if !known[iface.Name] && p.pool.MatchesIface(iface.Name) {
+			p.devices = append(p.devices, &deviceState{
+				device:  &pluginapi.Device{ID: iface.Name, Health: pluginapi.Healthy},
+				ifindex: iface.Index,
+			})
+			klog.Infof("[%s] discovered device: %s (ifindex=%d)", p.pool.ResourceName, iface.Name, iface.Index)
+			added = append(added, iface.Name)
+			changed = true
+		}
+	}
 	p.mu.Unlock()
+
+	for _, id := range added {
+		if err := p.writeDeviceInfoFile(id); err != nil {
+			klog.Errorf("%v", err)
+		}
+	}
 	return changed
 }
 

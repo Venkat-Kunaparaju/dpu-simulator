@@ -179,6 +179,28 @@ func TestAllocationGracePeriod(t *testing.T) {
 	assert.Equal(t, pluginapi.Unhealthy, healthByID(p.devicesSnapshot())[vf3])
 }
 
+// TestLateDeviceDiscovery verifies that a pool-matching netdev appearing
+// after startup (e.g. a VF that sat inside a pod netns across a plugin
+// restart) is added to the advertisement.
+func TestLateDeviceDiscovery(t *testing.T) {
+	t.Parallel()
+
+	env := &testEnv{ifaces: []net.Interface{iface(vf2, 12)}}
+	p := newTestPlugin(t, env)
+	ctx := context.Background()
+
+	env.ifaces = []net.Interface{iface(vf2, 12), iface(vf3, 13)}
+	assert.True(t, p.checkDevices(ctx))
+	assert.Equal(t,
+		map[string]string{vf2: pluginapi.Healthy, vf3: pluginapi.Healthy},
+		healthByID(p.devicesSnapshot()))
+
+	// Non-matching interfaces are not picked up.
+	env.ifaces = append(env.ifaces, iface("docker0", 40), iface(dpusim.HostDataIf(0), 41))
+	assert.False(t, p.checkDevices(ctx))
+	assert.Len(t, p.devicesSnapshot(), 2)
+}
+
 // TestAllocateRejectsUnknownDevice verifies that a device we never
 // advertised fails allocation with a clear error.
 func TestAllocateRejectsUnknownDevice(t *testing.T) {
@@ -276,6 +298,28 @@ func TestInterfaceListErrorFailsOpen(t *testing.T) {
 	}
 	assert.True(t, p.checkDevices(ctx))
 	assert.Equal(t, pluginapi.Unhealthy, healthByID(p.devicesSnapshot())[vf3])
+}
+
+// TestEmptyPoolAtStartup verifies that a pool with no matching netdevs at
+// startup (e.g. every VF sitting inside a pod netns across a plugin restart,
+// or a renamed mgmt VF) advertises an empty device list instead of failing,
+// and adopts devices once they appear in the host netns.
+func TestEmptyPoolAtStartup(t *testing.T) {
+	t.Parallel()
+
+	env := &testEnv{ifaces: []net.Interface{iface(dpusim.HostDataIf(0), 10)}}
+	p := newTestPlugin(t, env)
+	ctx := context.Background()
+
+	assert.Empty(t, p.devicesSnapshot())
+	assert.False(t, p.checkDevices(ctx))
+
+	// A matching netdev appears (e.g. moved back by CNI DEL): adopted.
+	env.ifaces = append(env.ifaces, iface(vf2, 12))
+	assert.True(t, p.checkDevices(ctx))
+	assert.Equal(t,
+		map[string]string{vf2: pluginapi.Healthy},
+		healthByID(p.devicesSnapshot()))
 }
 
 // TestDevicesSnapshotIsIndependent verifies that a snapshot handed to gRPC is
