@@ -35,6 +35,11 @@ spec:
               mountPath: /var/lib/kubelet/device-plugins
             - name: device-info
               mountPath: /var/run/k8s.cni.cncf.io/devinfo/dp
+            # Kubelet's PodResources socket, used by the health checker to
+            # tell in-use devices apart from destroyed ones.
+            - name: pod-resources
+              mountPath: /var/lib/kubelet/pod-resources
+              readOnly: true
       volumes:
         - name: device-plugin-socket
           hostPath:
@@ -43,3 +48,9 @@ spec:
           hostPath:
             path: /var/run/k8s.cni.cncf.io/devinfo/dp
             type: DirectoryOrCreate
+        - name: pod-resources
+          hostPath:
+            path: /var/lib/kubelet/pod-resources
+            # Owned by kubelet: fail the mount if it is missing rather than
+            # silently creating an empty directory with no socket in it.
+            type: Directory
