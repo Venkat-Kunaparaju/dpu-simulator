@@ -45,6 +45,11 @@ func (c *Config) SetOVNKubernetesMode(mode string) error {
 	case "", OVNKubernetesModeInstall:
 		c.OVNKubernetesMode = OVNKubernetesModeInstall
 	case OVNKubernetesModeValuesOnly:
+		for _, cluster := range c.Kubernetes.Clusters {
+			if cluster.IPFamily == IPFamilyIPv6 || cluster.IPFamily == IPFamilyDual {
+				return fmt.Errorf("IPv6 and dual-stack require the native Kind OVN overlay installation; values-only/no-overlay is not supported")
+			}
+		}
 		c.OVNKubernetesMode = OVNKubernetesModeValuesOnly
 	default:
 		return fmt.Errorf("unsupported OVN-Kubernetes mode %q, expected %q or %q", mode, OVNKubernetesModeInstall, OVNKubernetesModeValuesOnly)
@@ -366,11 +371,8 @@ func (c *Config) validateAndSetDefaults() error {
 		if cluster.Name == "" {
 			errors = append(errors, fmt.Sprintf("kubernetes.clusters[%d]: 'name' is required", i))
 		}
-		if c.Kubernetes.Clusters[i].PodCIDR == "" {
-			c.Kubernetes.Clusters[i].PodCIDR = "10.244.0.0/16"
-		}
-		if c.Kubernetes.Clusters[i].ServiceCIDR == "" {
-			c.Kubernetes.Clusters[i].ServiceCIDR = "10.245.0.0/16"
+		if err := c.setClusterIPFamilyDefaults(&c.Kubernetes.Clusters[i]); err != nil {
+			errors = append(errors, fmt.Sprintf("kubernetes.clusters[%d]: %v", i, err))
 		}
 		if c.Kubernetes.Clusters[i].CNI == "" {
 			errors = append(errors, fmt.Sprintf("kubernetes.clusters[%d]: 'cni' is required", i))

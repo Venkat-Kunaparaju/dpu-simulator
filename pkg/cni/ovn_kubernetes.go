@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -139,12 +140,16 @@ func (m *CNIManager) installOVNKubernetes(clusterName string, k8sIP string) erro
 	}
 	podCIDR := clusterCfg.PodCIDR
 	serviceCIDR := clusterCfg.ServiceCIDR
-	apiServerURL := "https://" + k8sIP + ":6443"
+	apiServerURL := "https://" + net.JoinHostPort(k8sIP, "6443")
 
 	log.Info("Installing OVN-Kubernetes (mode=%s): Pod CIDR: %s, Service CIDR: %s, API Server: %s",
 		mode, podCIDR, serviceCIDR, apiServerURL)
 
-	if err := m.patchCoreDNS("8.8.8.8"); err != nil {
+	dnsServer := "8.8.8.8"
+	if clusterCfg.IPFamily == config.IPFamilyIPv6 {
+		dnsServer = "2001:4860:4860::8888"
+	}
+	if err := m.patchCoreDNS(dnsServer); err != nil {
 		return fmt.Errorf("failed to patch CoreDNS: %w", err)
 	}
 
@@ -212,7 +217,7 @@ func (m *CNIManager) installOVNKubernetes(clusterName string, k8sIP string) erro
 		return nil
 	}
 
-	if err := m.runHelmInstall(mode, clusterName, ovnKPath, apiServerURL, podCIDR, serviceCIDR, ovnImage); err != nil {
+	if err := m.runHelmInstall(mode, clusterName, ovnKPath, apiServerURL, ovnImage); err != nil {
 		return fmt.Errorf("failed to run helm install: %w", err)
 	}
 
@@ -250,7 +255,7 @@ func (m *CNIManager) installOVNKubernetes(clusterName string, k8sIP string) erro
 //   - Full:     values-single-node-zone.yaml, global.image.*, OvnKubeIdentity
 //   - DPU-Host: values-single-node-zone.yaml, global.image.*, dpu-host subchart
 //   - DPU:      values-single-node-zone-dpu.yaml, global.dpuImage.*, host credentials
-func (m *CNIManager) runHelmInstall(mode ovnkMode, clusterName, ovnkRepoPath, apiServerURL, podCIDR, serviceCIDR, ovnImage string) error {
+func (m *CNIManager) runHelmInstall(mode ovnkMode, clusterName, ovnkRepoPath, apiServerURL, ovnImage string) error {
 	chartPath := filepath.Join(ovnkRepoPath, "helm", "ovn-kubernetes")
 	overrides, err := m.ovnkHelmOverrides(mode, clusterName, ovnImage, true, true)
 	if err != nil {
@@ -264,8 +269,6 @@ func (m *CNIManager) runHelmInstall(mode ovnkMode, clusterName, ovnkRepoPath, ap
 		args = append(args, "-f", "values-single-node-zone.yaml")
 		overrides = append(overrides,
 			helmValue{key: "k8sAPIServer", value: apiServerURL},
-			helmValue{key: "podNetwork", value: podCIDR},
-			helmValue{key: "serviceNetwork", value: serviceCIDR},
 			helmValue{key: "global.enableAdminNetworkPolicy", value: true},
 			helmValue{key: "global.enableEgressIp", value: true},
 			helmValue{key: "global.enableEgressFirewall", value: true},

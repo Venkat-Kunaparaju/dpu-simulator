@@ -2,6 +2,7 @@ package kind
 
 import (
 	"fmt"
+	"strings"
 
 	"sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
 
@@ -22,11 +23,29 @@ func (m *KindManager) BuildKindConfig(clusterName string, clusterCfg config.Clus
 		Name: clusterName,
 	}
 
+	ipFamily := v1alpha4.IPv4Family
+	switch clusterCfg.IPFamily {
+	case "", config.IPFamilyIPv4:
+	case config.IPFamilyIPv6:
+		ipFamily = v1alpha4.IPv6Family
+	case config.IPFamilyDual:
+		ipFamily = v1alpha4.DualStackFamily
+	default:
+		return nil, fmt.Errorf("unsupported IP family %q", clusterCfg.IPFamily)
+	}
+	podCIDRs := strings.Split(clusterCfg.PodCIDR, ",")
+	for i, cidr := range podCIDRs {
+		parts := strings.Split(cidr, "/")
+		if len(parts) == 3 {
+			podCIDRs[i] = strings.Join(parts[:2], "/")
+		}
+	}
+
 	// Networking configuration
 	cluster.Networking = v1alpha4.Networking{
-		PodSubnet:     clusterCfg.PodCIDR,
+		PodSubnet:     strings.Join(podCIDRs, ","),
 		ServiceSubnet: clusterCfg.ServiceCIDR,
-		IPFamily:      v1alpha4.IPv4Family,
+		IPFamily:      ipFamily,
 	}
 
 	// Disable default CNI for custom CNI installation.

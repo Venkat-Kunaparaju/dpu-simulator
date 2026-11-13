@@ -38,6 +38,11 @@ on:
         required: false
         type: string
         default: overlay
+      ip-family:
+        description: Deployment IP family (ipv4, ipv6 or dual; IPv6 and dual require overlay).
+        required: false
+        type: string
+        default: ipv4
       run-kube-burner:
         description: Run kube-burner node-density-cni before traffic flow tests.
         required: false
@@ -95,6 +100,7 @@ jobs:
           CONFIG: ${{ inputs.config }}
           TFT_CONFIG: ${{ inputs.tft-config }}
           DEPLOY_MODE: ${{ inputs.deploy-mode }}
+          IP_FAMILY: ${{ inputs.ip-family }}
           RUN_TFT: ${{ inputs.run-tft }}
         run: |
           config_path="${DPU_SIM_ROOT}/${CONFIG}"
@@ -105,6 +111,17 @@ jobs:
               exit 1
               ;;
           esac
+          case "${IP_FAMILY}" in
+            ipv4|ipv6|dual) ;;
+            *)
+              echo "::error::invalid ip-family: ${IP_FAMILY}"
+              exit 1
+              ;;
+          esac
+          if [ "${DEPLOY_MODE}" = "no-overlay" ] && [ "${IP_FAMILY}" != "ipv4" ]; then
+            echo "::error::IPv6 and dual-stack are supported only for overlay deployments"
+            exit 1
+          fi
           if [ ! -f "${config_path}" ]; then
             echo "::error::dpu-sim config not found: ${config_path}"
             exit 1
@@ -230,11 +247,12 @@ jobs:
         env:
           KIND_EXPERIMENTAL_PROVIDER: docker
           CONFIG_PATH: ${{ steps.paths.outputs.config_path }}
+          IP_FAMILY: ${{ inputs.ip-family }}
           # Keep docker save temp files off of /tmp to runner.temp
           TMPDIR: ${{ runner.temp }}
           DPU_SIM_KIND_IMAGE_TMPDIR: ${{ runner.temp }}
         run: |
-          "${DPU_SIM_ROOT}/bin/dpu-sim" --config "${CONFIG_PATH}" --ovn-kubernetes-path "${OVN_KUBERNETES_ROOT}"
+          "${DPU_SIM_ROOT}/bin/dpu-sim" --config "${CONFIG_PATH}" --ip-family "${IP_FAMILY}" --ovn-kubernetes-path "${OVN_KUBERNETES_ROOT}"
 
       - name: Deploy no-overlay DPU simulator with Helm
         if: ${{ steps.paths.outputs.deploy_mode == 'no-overlay' }}
@@ -295,6 +313,9 @@ jobs:
           CONFIG_PATH: ${{ steps.paths.outputs.config_path }}
           CONFIG_WORKDIR: ${{ steps.paths.outputs.config_workdir }}
           TFT_CONFIG_PATH: ${{ steps.paths.outputs.tft_config_path }}
+          CUSTOM_TFT_CONFIG: ${{ inputs.tft-config }}
+          DEPLOY_MODE: ${{ steps.paths.outputs.deploy_mode }}
+          IP_FAMILY: ${{ inputs.ip-family }}
           TFT_ENABLE_TARGET_ACCESS_SUBTESTS: "true"
           TFT_ENV: ${{ inputs.tft-env }}
         run: |
@@ -312,6 +333,17 @@ jobs:
             fi
             tft_env_args+=("${entry}")
           done <<< "${TFT_ENV}"
+
+          if [ "${DEPLOY_MODE}" = "overlay" ] && [ "${IP_FAMILY}" != "ipv4" ] && [ -z "${CUSTOM_TFT_CONFIG}" ]; then
+            family_config="${RUNNER_TEMP}/tft-overlay-${IP_FAMILY}.yaml"
+            "${TFT_ROOT}/.tft-venv/bin/python3" "${DPU_SIM_ROOT}/ci/tft/with-ip-family.py" \
+              "${IP_FAMILY}" "${TFT_CONFIG_PATH}" "${family_config}"
+            TFT_CONFIG_PATH="${family_config}"
+          fi
+          case "${IP_FAMILY}" in
+            ipv6) export TFT_UDN_PRIMARY_CIDR="${TFT_UDN_PRIMARY_CIDR:-fd15:1::/48/64}" ;;
+            dual) export TFT_UDN_PRIMARY_CIDR="${TFT_UDN_PRIMARY_CIDR:-15.1.0.0/16/24,fd15:1::/48/64}" ;;
+          esac
 
           env "${tft_env_args[@]}" \
             TFT_KUBECONFIG="${CONFIG_WORKDIR}/kubeconfig/dpu-sim-host.kubeconfig" \

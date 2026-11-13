@@ -26,6 +26,7 @@ var (
 	logLevel          string
 	ovnKubernetesPath string
 	ovnKubernetesMode string
+	ipFamily          string
 
 	// Root command flags
 	skipDeps    bool
@@ -63,6 +64,7 @@ func init() {
 		fmt.Sprintf("OVN-Kubernetes handling mode (%s|%s)", config.OVNKubernetesModeInstall, config.OVNKubernetesModeValuesOnly))
 
 	// Root command flags
+	rootCmd.Flags().StringVar(&ipFamily, "ip-family", "", "Deployment IP family (ipv4|ipv6|dual; defaults to cluster ip_family or ipv4)")
 	rootCmd.Flags().BoolVar(&cleanupOnly, "cleanup", false, "Only cleanup existing resources, do not deploy")
 	rootCmd.Flags().BoolVar(&skipDeps, "skip-deps", false, "Skip dependency checks")
 	rootCmd.Flags().BoolVar(&skipCleanup, "skip-cleanup", false, "Skip cleanup of existing resources")
@@ -88,6 +90,12 @@ func runDeploy(cmd *cobra.Command, args []string) error {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	if cmd.Flags().Changed("ip-family") {
+		if err := cfg.SetDeploymentIPFamily(ipFamily); err != nil {
+			return err
+		}
 	}
 
 	ovnPath := strings.TrimSpace(ovnKubernetesPath)

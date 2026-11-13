@@ -17,19 +17,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: overlay
+          - name: overlay dual-stack
             deploy-mode: overlay
+            ip-family: dual
+            tft-repo-url: https://github.com/Venkat-Kunaparaju/kubernetes-traffic-flow-tests
+            tft-ref: e8f7a8285c63a8b9e32a1778279d85f08fc895d8
             run-kube-burner: true
             run-tft: true
-            artifact-prefix: kind-dpu-offload
-          - name: no-overlay
+            artifact-prefix: kind-dpu-offload-dual
+          - name: no-overlay ipv4
             deploy-mode: no-overlay
+            ip-family: ipv4
             run-kube-burner: false
             run-tft: true
             artifact-prefix: kind-dpu-no-overlay
     uses: ./.github/workflows/kind-tft.yml
     with:
       deploy-mode: ${{ matrix.deploy-mode }}
+      ip-family: ${{ matrix.ip-family }}
+      tft-repo-url: ${{ matrix.tft-repo-url || 'https://github.com/ovn-kubernetes/kubernetes-traffic-flow-tests' }}
+      tft-ref: ${{ matrix.tft-ref || 'main' }}
       run-kube-burner: ${{ matrix.run-kube-burner }}
       run-tft: ${{ matrix.run-tft }}
       artifact-prefix: ${{ matrix.artifact-prefix }}

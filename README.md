@@ -209,6 +209,62 @@ VM mode runs each node as a **KVM guest** under **libvirt**: dpu-sim defines dom
 - **Images and registry**: The **`operating_system`** section drives downloading or reusing the **qcow2** base image. An optional **local container registry** on the host builds and serves images (for example **OVN-Kubernetes**); nodes pull from it during CNI install. With **`kubernetes.offload_dpu`**, a **device plugin** image can be built and published the same way.
 - **Install path**: After VMs are up, dpu-sim uses **SSH** (see **`ssh`**) to run **kubeadm** / **kubelet** bootstrap and then installs the configured **CNI** and **addons** per cluster. **OVN-Kubernetes DPU offload** follows the same split host / DPU cluster idea as Kind: OVS and **`external_ids`** on DPU-side nodes mirror real DPU bring-up.
 
+### Deployment IP family
+
+IPv4 is the default when `ip_family` and `--ip-family` are omitted. For native
+Kind OVN-Kubernetes overlay deployments, select the workload family with:
+
+```bash
+./bin/dpu-sim --config config-kind-ovnk-offload.yaml --ip-family ipv4
+./bin/dpu-sim --config config-kind-ovnk-offload.yaml --ip-family ipv6
+./bin/dpu-sim --config config-kind-ovnk-offload.yaml --ip-family dual
+```
+
+The CLI override preserves configured IPv4 CIDRs and adds `fd00:10:244::/48`
+for Pods and `fd00:10:245::/112` for Services when selecting dual-stack from
+an IPv4 configuration. Existing dual-stack CIDRs are preserved. Selecting
+`ipv4` or `ipv6` keeps only the selected family, using its defaults when
+that family is absent. In an offload topology the override leaves
+the DPU infrastructure cluster on IPv4/Flannel.
+
+Alternatively, configure the workload cluster explicitly:
+
+```yaml
+kubernetes:
+  clusters:
+    - name: dpu-sim-host
+      ip_family: dual
+      pod_cidr: "10.244.0.0/16,fd00:10:244::/48"
+      service_cidr: "10.245.0.0/16,fd00:10:245::/112"
+      cni: ovn-kubernetes
+```
+
+Merge this entry into the chosen topology configuration. With `ip_family: dual`,
+omitted CIDRs default to the pairs shown above; explicitly configured CIDRs
+must contain one IPv4 and one IPv6 network, in that order. Pod CIDRs may include
+OVN per-node prefixes, for example `10.244.0.0/16/26,fd00:10:244::/48/64`.
+Kind receives plain CIDRs; OVN receives per-node prefixes, defaulting to `/24`
+for IPv4 and `/64` for IPv6. Service CIDRs always use plain CIDR notation.
+
+IPv6 and dual-stack are scoped to native Kind OVN overlay installs. VM,
+other primary CNIs, DPU infrastructure, and `--ovnk-mode values-only`/no-overlay
+deployments reject these selections. The reusable `kind-tft.yml` workflow
+accepts `ip-family: ipv4|ipv6|dual`, defaulting to `ipv4`; the existing overlay
+DPU offload lane selects `dual`.
+
+For the default overlay TFT suite, the workflow fills omitted connection
+families from the deployment choice (`dual` becomes TFT's `dual-stack`).
+Caller-provided TFT files retain their explicit configuration. IPv6 and dual
+runs also receive matching primary UDN subnets; `tft-env` can override them.
+The dual-stack lane currently pins the TFT implementation from PR #298;
+return it to upstream `main` after that PR merges.
+
+IPv6-only CoreDNS uses an IPv6 upstream resolver, so external DNS and traffic
+require working IPv6 egress. API and DPU infrastructure management can remain
+IPv4. Upstream OVN's DPU gateway address derivation currently selects one
+family from a host node IP; full dual-stack DPU gateway traffic still requires
+runtime validation and potentially an upstream OVN change.
+
 ### Kind Architecture
 
 Kind mode models the same **split host / DPU Kubernetes** idea as VM mode, but each node runs as a **container** (Docker or Podman) managed by [Kind](https://kind.sigs.k8s.io/), not as a libvirt/QEMU guest.

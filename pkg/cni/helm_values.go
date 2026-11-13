@@ -79,11 +79,37 @@ func (m *CNIManager) ovnkHelmOverrides(mode ovnkMode, clusterName, ovnImage stri
 		pullPolicy = "IfNotPresent"
 	}
 
+	var networkValues []helmValue
+	if mode == ovnkModeFull || mode == ovnkModeDPUHost || mode == ovnkModeDPU {
+		cluster := m.config.GetClusterConfig(clusterName)
+		if mode == ovnkModeDPU {
+			cluster = m.config.GetClusterConfig(m.config.GetDPUHostClusterName())
+		}
+		if cluster == nil {
+			return nil, fmt.Errorf("workload cluster configuration not found for %s", clusterName)
+		}
+		podCIDR, err := podCIDRWithPerNodePrefix(cluster.PodCIDR)
+		if err != nil {
+			return nil, err
+		}
+		if mode == ovnkModeDPU {
+			networkValues = []helmValue{
+				{key: "global.dpuHostClusterNetworkCIDR", value: podCIDR},
+				{key: "global.dpuHostClusterServiceCIDR", value: cluster.ServiceCIDR},
+			}
+		} else {
+			networkValues = []helmValue{
+				{key: "podNetwork", value: podCIDR},
+				{key: "serviceNetwork", value: cluster.ServiceCIDR},
+			}
+		}
+	}
+
 	switch mode {
 	case ovnkModeFull:
-		return imageHelmValues("global.image", imageRepo, imageTag, pullPolicy), nil
+		return append(imageHelmValues("global.image", imageRepo, imageTag, pullPolicy), networkValues...), nil
 	case ovnkModeDPUHost:
-		overrides := imageHelmValues("global.image", imageRepo, imageTag, pullPolicy)
+		overrides := append(imageHelmValues("global.image", imageRepo, imageTag, pullPolicy), networkValues...)
 		overrides = append(overrides,
 			helmValue{key: "tags.ovs-node", value: false},
 			helmValue{key: "tags.ovnkube-node-dpu-host", value: true},
@@ -113,7 +139,7 @@ func (m *CNIManager) ovnkHelmOverrides(mode ovnkMode, clusterName, ovnImage stri
 		}
 		return overrides, nil
 	case ovnkModeDPU:
-		overrides := imageHelmValues("global.dpuImage", imageRepo, imageTag, pullPolicy)
+		overrides := append(imageHelmValues("global.dpuImage", imageRepo, imageTag, pullPolicy), networkValues...)
 		overrides = append(overrides,
 			helmValue{key: "tags.ovs-node", value: false},
 			helmValue{key: "tags.ovnkube-node-dpu-host", value: false},
@@ -144,8 +170,6 @@ func (m *CNIManager) ovnkHelmOverrides(mode ovnkMode, clusterName, ovnImage stri
 			helmValue{key: "global.dpuHostClusterK8sAPIServer", value: creds.APIServer},
 			helmValue{key: "global.dpuHostClusterK8sToken", value: creds.Token},
 			helmValue{key: "global.dpuHostClusterK8sCACertData", value: creds.CACert},
-			helmValue{key: "global.dpuHostClusterNetworkCIDR", value: creds.PodCIDR},
-			helmValue{key: "global.dpuHostClusterServiceCIDR", value: creds.ServiceCIDR},
 		)
 		return overrides, nil
 	default:
@@ -163,7 +187,10 @@ func imageHelmValues(prefix, repository, tag, pullPolicy string) []helmValue {
 
 func appendHelmSetArgs(args []string, values []helmValue) []string {
 	for _, value := range values {
-		args = append(args, "--set", fmt.Sprintf("%s=%v", value.key, value.value))
+		text := fmt.Sprint(value.value)
+		text = strings.ReplaceAll(text, "\\", "\\\\")
+		text = strings.ReplaceAll(text, ",", "\\,")
+		args = append(args, "--set", fmt.Sprintf("%s=%s", value.key, text))
 	}
 	return args
 }
@@ -365,6 +392,18 @@ func (m *CNIManager) getDPUHostClusterSecretCredentials(namespace, secretName st
 }
 
 func podCIDRWithPerNodePrefix(podCIDR string) (string, error) {
+	cidrs := strings.Split(podCIDR, ",")
+	for i, cidr := range cidrs {
+		normalized, err := singlePodCIDRWithPerNodePrefix(strings.TrimSpace(cidr))
+		if err != nil {
+			return "", err
+		}
+		cidrs[i] = normalized
+	}
+	return strings.Join(cidrs, ","), nil
+}
+
+func singlePodCIDRWithPerNodePrefix(podCIDR string) (string, error) {
 	parts := strings.Split(podCIDR, "/")
 	if len(parts) < 2 || len(parts) > 3 {
 		return "", fmt.Errorf("pod CIDR %q must be CIDR or CIDR/hostSubnetPrefix", podCIDR)
@@ -374,20 +413,20 @@ func podCIDRWithPerNodePrefix(podCIDR string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to parse pod CIDR %q: %w", podCIDR, err)
 	}
-	if parsedCIDR.IP.To4() == nil {
-		return "", fmt.Errorf("pod CIDR %q must be IPv4", podCIDR)
-	}
-	clusterPrefix, _ := parsedCIDR.Mask.Size()
+	clusterPrefix, bits := parsedCIDR.Mask.Size()
 
 	hostPrefix := 24
+	if parsedCIDR.IP.To4() == nil {
+		hostPrefix = 64
+	}
 	if len(parts) == 3 {
 		hostPrefix, err = strconv.Atoi(parts[2])
 		if err != nil {
 			return "", fmt.Errorf("failed to parse host subnet prefix in pod CIDR %q: %w", podCIDR, err)
 		}
 	}
-	if hostPrefix <= clusterPrefix || hostPrefix > 32 {
-		return "", fmt.Errorf("pod CIDR %q must use a host subnet prefix greater than the cluster prefix and no larger than 32", podCIDR)
+	if hostPrefix <= clusterPrefix || hostPrefix > bits {
+		return "", fmt.Errorf("pod CIDR %q must use a host subnet prefix greater than the cluster prefix and no larger than %d", podCIDR, bits)
 	}
 
 	if len(parts) == 3 {

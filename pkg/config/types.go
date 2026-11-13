@@ -236,6 +236,7 @@ func (k *KubernetesConfig) GetKubeconfigDir() string {
 // ClusterConfig represents a Kubernetes cluster configuration
 type ClusterConfig struct {
 	Name        string      `yaml:"name"`
+	IPFamily    string      `yaml:"ip_family,omitempty"`
 	PodCIDR     string      `yaml:"pod_cidr"`
 	ServiceCIDR string      `yaml:"service_cidr"`
 	CNI         CNIType     `yaml:"cni"`
